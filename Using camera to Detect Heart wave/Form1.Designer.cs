@@ -32,6 +32,7 @@
             this.ActiveButton = new System.Windows.Forms.Button();
             this.save_data = new System.Windows.Forms.Button();
             this.directorySearcher1 = new System.DirectoryServices.DirectorySearcher();
+            this.button1 = new System.Windows.Forms.Button();
             ((System.ComponentModel.ISupportInitialize)(this.pictureBox1)).BeginInit();
             this.SuspendLayout();
             // 
@@ -59,7 +60,7 @@
             // 
             // save_data
             // 
-            this.save_data.Location = new System.Drawing.Point(700, 250);
+            this.save_data.Location = new System.Drawing.Point(700, 396);
             this.save_data.Name = "save_data";
             this.save_data.Size = new System.Drawing.Size(75, 42);
             this.save_data.TabIndex = 2;
@@ -73,11 +74,22 @@
             this.directorySearcher1.ServerPageTimeLimit = System.TimeSpan.Parse("-00:00:01");
             this.directorySearcher1.ServerTimeLimit = System.TimeSpan.Parse("-00:00:01");
             // 
+            // button1
+            // 
+            this.button1.Location = new System.Drawing.Point(700, 232);
+            this.button1.Name = "button1";
+            this.button1.Size = new System.Drawing.Size(75, 41);
+            this.button1.TabIndex = 3;
+            this.button1.Text = "Detect";
+            this.button1.UseVisualStyleBackColor = true;
+            this.button1.Click += new System.EventHandler(this.button1_Click);
+            // 
             // Form1
             // 
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
             this.ClientSize = new System.Drawing.Size(800, 450);
+            this.Controls.Add(this.button1);
             this.Controls.Add(this.save_data);
             this.Controls.Add(this.ActiveButton);
             this.Controls.Add(this.pictureBox1);
@@ -94,6 +106,8 @@
         private System.Windows.Forms.Button ActiveButton;
         private System.Windows.Forms.Button save_data;
         private System.DirectoryServices.DirectorySearcher directorySearcher1;
+        private System.Windows.Forms.Button button1;
+
     }
 }
 
