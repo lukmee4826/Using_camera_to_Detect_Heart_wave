@@ -12,6 +12,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using static System.Windows.Forms.VisualStyles.VisualStyleElement.ProgressBar;
 
 
 
@@ -29,7 +30,7 @@ namespace Using_camera_to_Detect_Heart_wave
             InitializeComponent();
         }
         Thread thread;
-
+        private int regionSize = 20;
         bool isActive = false;
         private void ActiveButton_Click(object sender, EventArgs e)
         {
@@ -63,58 +64,103 @@ namespace Using_camera_to_Detect_Heart_wave
                 if (image.Empty()) break;
 
                 // Center point
+                
+                int halfRegion = regionSize / 2;
                 int centerX = image.Width / 2;
                 int centerY = image.Height / 2;
-                
+
                 if (image.Channels() == 3 &&
-                    centerX >= 0 && centerX < image.Width &&
-                    centerY >= 0 && centerY < image.Height)
+                centerX >= halfRegion && centerX < image.Width - halfRegion &&
+                centerY >= halfRegion && centerY < image.Height - halfRegion)
                 {
-                    var pixel = image.At<Vec3b>(centerY, centerX); // (row, col) = (Y, X)
+                    long sumR = 0, sumG = 0, sumB = 0;
+                    int count = 0;
 
-                    try
+                    for (int y = centerY - halfRegion; y < centerY + halfRegion; y++)
                     {
-                        this.Invoke(new Action(() =>
+                        for (int x = centerX - halfRegion; x < centerX + halfRegion; x++)
                         {
-                            this.Text = $"Center Point RGB: R={pixel.Item2} G={pixel.Item1} B={pixel.Item0}";
-                        }));
-                    }
-                    catch (Exception ex)
-                    {
-                        Debug.WriteLine($"Detection error: {ex.Message}");
+                            var pixel = image.At<Vec3b>(y, x);
+                            sumB += pixel.Item0;
+                            sumG += pixel.Item1;
+                            sumR += pixel.Item2;
+                            count++;
+                        }
                     }
 
-                    Cv2.Circle(image, new OpenCvSharp.Point(centerX, centerY), 2, Scalar.Red, -1);
+                    int avgR = (int)(sumR / count);
+                    int avgG = (int)(sumG / count);
+                    int avgB = (int)(sumB / count);
+
+                    if (!isNoseDetectionEnabled)
+                    {
+                        try
+                        {
+                            this.Invoke(new Action(() =>
+                            {
+                                this.Text = $"Center Area Avg RGB: R={avgR} G={avgG} B={avgB}";
+                                Cv2.Rectangle(image,
+                                    new OpenCvSharp.Rect(centerX - halfRegion, centerY - halfRegion, regionSize, regionSize),
+                                    Scalar.Red, 1);
+                            }));
+                        }
+                        catch (Exception ex)
+                        {
+                            Debug.WriteLine($"Display error: {ex.Message}");
+                        }
+                    }
 
                     if (isSave)
                     {
                         double elapsedSeconds = stopwatch.Elapsed.TotalSeconds;
                         string timeStamp = elapsedSeconds.ToString("F4", CultureInfo.InvariantCulture);
-                        string dataLine = $"{timeStamp},{pixel.Item2},{pixel.Item1},{pixel.Item0}";
+                        string dataLine = $"{timeStamp},{avgR},{avgG},{avgB}";
                         waveDataLog.Add(dataLine);
                     }
+
+                   
                 }
 
-                
                 if (isNoseDetectionEnabled)
                 {
-                    if (DetectNose(image, out Vec3b noseRGB, out OpenCvSharp.Point noseCenter))
+                    if (DetectNose(image, out Rect noseRect, out OpenCvSharp.Point noseCenter))
                     {
-                        if (isSave)
+                        int sumR = 0, sumG = 0, sumB = 0;
+                        int count = 0;
+
+                        for (int y = noseRect.Top; y < noseRect.Bottom && y < image.Height; y++)
                         {
-                            double elapsedSeconds = stopwatch.Elapsed.TotalSeconds;
-                            string timeStamp = elapsedSeconds.ToString("F4", CultureInfo.InvariantCulture);
-                            string dataLine = $"{timeStamp},{noseRGB.Item2},{noseRGB.Item1},{noseRGB.Item0}";
-                            waveDataLog.Add(dataLine);
+                            for (int x = noseRect.Left; x < noseRect.Right && x < image.Width; x++)
+                            {
+                                Vec3b pixel = image.At<Vec3b>(y, x);
+                                sumB += pixel.Item0;
+                                sumG += pixel.Item1;
+                                sumR += pixel.Item2;
+                                count++;
+                            }
                         }
 
-                        this.Invoke(new Action(() =>
+                        if (count > 0)
                         {
-                            this.Text = $"Nose RGB: R={noseRGB.Item2} G={noseRGB.Item1} B={noseRGB.Item0}";
-                        }));
+                            int avgR = sumR / count;
+                            int avgG = sumG / count;
+                            int avgB = sumB / count;
+
+                            if (isSave)
+                            {
+                                double elapsedSeconds = stopwatch.Elapsed.TotalSeconds;
+                                string timeStamp = elapsedSeconds.ToString("F4", CultureInfo.InvariantCulture);
+                                string dataLine = $"{timeStamp},{avgR},{avgG},{avgB}";
+                                waveDataLog.Add(dataLine);
+                            }
+
+                            this.Invoke(new Action(() =>
+                            {
+                                this.Text = $"Nose RGB (avg): R={avgR} G={avgG} B={avgB}";
+                            }));
+                        }
                     }
                 }
-
                 pictureBox1.Image?.Dispose();
                 pictureBox1.Image = OpenCvSharp.Extensions.BitmapConverter.ToBitmap(image);
             }
@@ -206,41 +252,30 @@ namespace Using_camera_to_Detect_Heart_wave
             pictureBox1.Image?.Dispose();
         }
 
-        
-        private void pictureBox1_Click(object sender, EventArgs e)
-        {
-           
-        }
-
 
 
         private bool isNoseDetectionEnabled = false;
 
-        private bool DetectNose(Mat image, out Vec3b rgb, out OpenCvSharp.Point center)
+        private bool DetectNose(Mat image, out Rect noseRect, out OpenCvSharp.Point center)
         {
-            rgb = new Vec3b();
+            noseRect = new Rect();
             center = new OpenCvSharp.Point();
 
             try
             {
                 var gray = new Mat();
                 Cv2.CvtColor(image, gray, ColorConversionCodes.BGRA2GRAY);
-                Mat resized = new Mat();
-                Cv2.Resize(gray, resized, new OpenCvSharp.Size(gray.Width / 3, gray.Height / 3));
 
                 var noseCascade = new CascadeClassifier("C:\\code\\Iwate Internship\\Using camera to Detect Heart wave\\Using camera to Detect Heart wave\\Feature\\nose.xml");
                 Rect[] noses = noseCascade.DetectMultiScale(gray, 1.1, 4, HaarDetectionTypes.ScaleImage);
 
                 if (noses.Length > 0)
                 {
-                    var nose = noses[0];
-                    center = new OpenCvSharp.Point(nose.X + nose.Width / 2, nose.Y + nose.Height / 2);
-                    rgb = image.At<Vec3b>(center.Y, center.X);
+                    noseRect = noses[0];
+                    center = new OpenCvSharp.Point(noseRect.X + noseRect.Width / 2, noseRect.Y + noseRect.Height / 2);
 
-                   
-                    Cv2.Rectangle(image, nose, Scalar.Green, 2);
-                    Cv2.Circle(image, center, 2, Scalar.Red, -1);
-
+                    Cv2.Rectangle(image, noseRect, Scalar.Red, 1);
+                    
                     return true;
                 }
             }
@@ -259,5 +294,19 @@ namespace Using_camera_to_Detect_Heart_wave
             button1.Text = isNoseDetectionEnabled ? "Nose Detection: ON" : "Nose Detection: OFF";
             button1.BackColor = isNoseDetectionEnabled ? Color.Orange : Color.Gray;
         }
+
+        private void trackBar1_Scroll(object sender, EventArgs e)
+        {
+            regionSize = trackBar1.Value;
+
+            this.Text = $"Region Size: {regionSize} x {regionSize}";
+        }
+
+        private void pictureBox1_Click(object sender, EventArgs e)
+        {
+
+        }
+
     }
 }
+
