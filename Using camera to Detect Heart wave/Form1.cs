@@ -13,13 +13,15 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using static System.Windows.Forms.VisualStyles.VisualStyleElement.ProgressBar;
-
+using System.Windows.Forms.DataVisualization.Charting;
+using Accord.Statistics.Analysis;
 
 
 namespace Using_camera_to_Detect_Heart_wave
 {
     public partial class Form1 : Form
     {
+        public IndependentComponentAlgorithm Algorithm { get; set; }
         private Stopwatch stopwatch = new Stopwatch();
 
         private List<string> waveDataLog = new List<string>();
@@ -32,6 +34,124 @@ namespace Using_camera_to_Detect_Heart_wave
         Thread thread;
         private int regionSize = 20;
         bool isActive = false;
+
+        private Queue<double> posSignalQueue = new Queue<double>();
+        private int signalWindowSize = 100;
+        private Chart signalChart;
+
+        private List<double> R_list = new List<double>();
+        private List<double> G_list = new List<double>();
+        private List<double> B_list = new List<double>();
+
+        private Queue<double> rQueue = new Queue<double>();
+        private Queue<double> gQueue = new Queue<double>();
+        private Queue<double> bQueue = new Queue<double>();
+
+        CancellationTokenSource cts = new CancellationTokenSource();
+        private void InitChart()
+        {
+            signalChart = new Chart();
+            signalChart.Dock = DockStyle.Fill;
+
+            ChartArea chartArea = new ChartArea("MainArea");
+            chartArea.AxisX.Title = "Frame";
+
+            // Primary Y axis for RGB
+            chartArea.AxisY.Title = "RGB Intensity";
+            chartArea.AxisY.Minimum = 0;
+            chartArea.AxisY.Maximum = 255;
+            chartArea.AxisY.MajorGrid.LineColor = Color.LightGray;
+
+            // Secondary Y axis for POS
+            chartArea.AxisY2.Title = "POS Signal";
+            chartArea.AxisY2.Enabled = AxisEnabled.True;
+            chartArea.AxisY2.MajorGrid.Enabled = false;
+            chartArea.AxisY2.Minimum = -5.0;
+            chartArea.AxisY2.Maximum = 5.0;
+
+            signalChart.ChartAreas.Add(chartArea);
+
+            // POS Signal using secondary Y axis
+            var posSeries = new Series("POS Signal")
+            {
+                ChartType = SeriesChartType.Line,
+                Color = Color.Red,
+                BorderWidth = 2,
+                ChartArea = "MainArea",
+                YAxisType = AxisType.Secondary
+            };
+
+            // RGB Series using primary Y axis
+            var rSeries = new Series("R")
+            {
+                ChartType = SeriesChartType.Line,
+                Color = Color.Red,
+                BorderWidth = 1
+            };
+            var gSeries = new Series("G")
+            {
+                ChartType = SeriesChartType.Line,
+                Color = Color.Green,
+                BorderWidth = 1
+            };
+            var bSeries = new Series("B")
+            {
+                ChartType = SeriesChartType.Line,
+                Color = Color.Blue,
+                BorderWidth = 1
+            };
+
+            signalChart.Series.Add(posSeries);
+            signalChart.Series.Add(rSeries);
+            signalChart.Series.Add(gSeries);
+            signalChart.Series.Add(bSeries);
+
+            pictureBox2.Controls.Clear();
+            pictureBox2.Controls.Add(signalChart);
+            signalChart.BringToFront();
+        }
+
+        private void UpdateChart(double posValue, int r, int g, int b)
+        {
+            if (signalChart == null || signalChart.Series.Count < 4)
+                return;
+
+            if (posSignalQueue.Count >= signalWindowSize)
+            {
+                posSignalQueue.Dequeue();
+                rQueue.Dequeue();
+                gQueue.Dequeue();
+                bQueue.Dequeue();
+            }
+
+            posSignalQueue.Enqueue(posValue);
+            rQueue.Enqueue(r);
+            gQueue.Enqueue(g);
+            bQueue.Enqueue(b);
+
+            signalChart.Series["POS Signal"].Points.Clear();
+            signalChart.Series["R"].Points.Clear();
+            signalChart.Series["G"].Points.Clear();
+            signalChart.Series["B"].Points.Clear();
+
+            int i = 0;
+            foreach (var val in posSignalQueue)
+            {
+                signalChart.Series["POS Signal"].Points.AddXY(i++, val);
+            }
+
+            i = 0;
+            foreach (var val in rQueue) signalChart.Series["R"].Points.AddXY(i++, val);
+            i = 0;
+            foreach (var val in gQueue) signalChart.Series["G"].Points.AddXY(i++, val);
+            i = 0;
+            foreach (var val in bQueue) signalChart.Series["B"].Points.AddXY(i++, val);
+
+            var area = signalChart.ChartAreas[0];
+            area.AxisX.Minimum = Math.Max(0, i - signalWindowSize);
+            area.AxisX.Maximum = i;
+        }
+
         private void ActiveButton_Click(object sender, EventArgs e)
         {
             if (!isActive)
@@ -55,6 +175,8 @@ namespace Using_camera_to_Detect_Heart_wave
                 isActive = false;
             }
         }
+
+
 
         public void ShowCamera()
         {
@@ -91,6 +213,26 @@ namespace Using_camera_to_Detect_Heart_wave
                     int avgR = (int)(sumR / count);
                     int avgG = (int)(sumG / count);
                     int avgB = (int)(sumB / count);
+
+                   
+
+                    R_list.Add(avgR);
+                    G_list.Add(avgG);
+                    B_list.Add(avgB);
+
+                    if (R_list.Count > 1)
+                    {
+                        double[] S = GetPOS(R_list, G_list, B_list);
+                        if (S.Length > 0)
+                        {
+                            double last = S[S.Length - 1];
+                            this.Invoke(new Action(() =>
+                            {
+                                UpdateChart(last, avgR, avgG, avgB);
+                            }));
+                        }
+                    }
+
 
                     if (!isNoseDetectionEnabled)
                     {
@@ -165,7 +307,97 @@ namespace Using_camera_to_Detect_Heart_wave
                 pictureBox1.Image = OpenCvSharp.Extensions.BitmapConverter.ToBitmap(image);
             }
         }
+        
 
+        private double[] GetICA(List<double> R, List<double> G, List<double> B)
+        {
+            int len = Math.Min(R.Count, Math.Min(G.Count, B.Count));
+            if (len < 60) return new double[0];
+
+            int windowSize = 60;
+            if (len > windowSize)
+            {
+                R = R.Skip(len - windowSize).ToList();
+                G = G.Skip(len - windowSize).ToList();
+                B = B.Skip(len - windowSize).ToList();
+                len = windowSize;
+            }
+
+            // Construct the RGB matrix: [samples][channels]
+            double[][] rgbMatrix = new double[len][];
+            for (int i = 0; i < len; i++)
+            {
+                rgbMatrix[i] = new double[3] { R[i], G[i], B[i] };
+            }
+
+            // Run ICA (no Method or Algorithm property in version 3.8.0)
+            var ica = new IndependentComponentAnalysis(); // 3 outputs
+
+            ica.Learn(rgbMatrix); // Learn ICA components
+            double[][] sources = ica.Transform(rgbMatrix); // Apply transformation
+
+            // Select the first component as BVP signal (you can try others too)
+            double[] bvp = sources.Select(s => s[0]).ToArray();
+
+            return bvp;
+        }
+
+
+        private double[] GetPOS(List<double> R, List<double> G, List<double> B)
+        {
+            int len = Math.Min(R.Count, Math.Min(G.Count, B.Count));
+            if (len < 60) return new double[0]; // need enough frames
+
+            int windowSize = 60;
+            if (len > windowSize)
+            {
+                R = R.Skip(len - windowSize).ToList();
+                G = G.Skip(len - windowSize).ToList();
+                B = B.Skip(len - windowSize).ToList();
+                len = windowSize;
+            }
+
+            // Convert to double arrays
+            double[] r = R.ToArray();
+            double[] g = G.ToArray();
+            double[] b = B.ToArray();
+
+            // Normalize each color channel by its mean (temporal normalization)
+            double meanR = r.Average();
+            double meanG = g.Average();
+            double meanB = b.Average();
+
+            for (int i = 0; i < len; i++)
+            {
+                r[i] = r[i] / (meanR + 1e-8) - 1.0;
+                g[i] = g[i] / (meanG + 1e-8) - 1.0;
+                b[i] = b[i] / (meanB + 1e-8) - 1.0;
+            }
+
+            // POS projection
+            double[] x1 = new double[len];
+            double[] x2 = new double[len];
+            for (int i = 0; i < len; i++)
+            {
+                x1[i] = 2.0 * r[i] - g[i];
+                x2[i] = 1.5 * r[i] + g[i] - 1.5 * b[i];
+            }
+
+            // Normalize x1 and x2
+            double meanX1 = x1.Average();
+            double meanX2 = x2.Average();
+            double stdX2 = Math.Sqrt(x2.Select(v => (v - meanX2) * (v - meanX2)).Average());
+            stdX2 = Math.Max(stdX2, 1e-6); // avoid division explosion
+
+            // Combine signal
+            double[] h = new double[len];
+            for (int i = 0; i < len; i++)
+            {
+                h[i] = (x1[i] - meanX1) + (x2[i] - meanX2) / stdX2;
+            }
+
+            return h;
+        }
 
 
         bool isSave = false;
@@ -307,6 +539,15 @@ namespace Using_camera_to_Detect_Heart_wave
 
         }
 
+        private void Form1_Load(object sender, EventArgs e)
+        {
+            InitChart();
+        }
+
+        private void pictureBox2_Click(object sender, EventArgs e)
+        {
+
+        }
     }
 }
 
